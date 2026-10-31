@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Snow Slope Mobile</title>
+  <style>
+    :root {
+      --sky1: #8ecbff;
+      --sky2: #eaf7ff;
+      --panel: rgba(15, 23, 42, 0.38);
+      --panel-border: rgba(255,255,255,0.5);
+      --text: #fff;
+      --accent: #fbbf24;
+      --danger: #ef4444;
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: linear-gradient(180deg, var(--sky1), var(--sky2));
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #game-wrap {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      max-width: 900px;
+      max-height: 100vh;
+      overflow: hidden;
+      background: linear-gradient(180deg, #8ecbff 0%, #dfefff 55%, #f7fbff 100%);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(180deg, #8ecbff 0%, #dfefff 55%, #f7fbff 100%);
+      touch-action: none;
+    }
+
+    .hud {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 20;
+      pointer-events: none;
+      color: var(--text);
+      text-shadow: 0 2px 8px rgba(0,0,0,0.5);
+      font-weight: 700;
+    }
+
+    .hud .box {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 8px 12px;
+      margin-bottom: 8px;
+      font-size: 16px;
+      backdrop-filter: blur(3px);
+    }
+
+    .controls {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 180px;
+      z-index: 25;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      padding: 0 14px 14px 14px;
+      pointer-events: none;
+    }
+
+    .touch-pad {
+      width: 148px;
+      height: 148px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.12);
+      border: 2px solid rgba(255,255,255,0.3);
+      position: relative;
+      backdrop-filter: blur(4px);
+      pointer-events: auto;
+      touch-action: none;
+      box-shadow: inset 0 0 30px rgba(255,255,255,0.08);
+    }
+
+    .touch-pad::before {
+      content: "";
+      position: absolute;
+      inset: 22px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.18);
+    }
+
+    .touch-stick {
+      position: absolute;
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(255,255,255,0.26);
+      border: 2px solid rgba(255,255,255,0.5);
+      box-shadow: 0 8px 18px rgba(15,23,42,0.18);
+    }
+
+    .jump-btn {
+      width: 110px;
+      height: 110px;
+      border-radius: 50%;
+      background: rgba(251, 191, 36, 0.85);
+      border: 3px solid rgba(255,255,255,0.45);
+      box-shadow: 0 10px 26px rgba(251, 191, 36, 0.25);
+      color: white;
+      font-size: 28px;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: auto;
+      touch-action: none;
+      user-select: none;
+    }
+
+    @media (min-width: 700px) {
+      .controls {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="game-wrap">
+    <div class="hud">
+      <div class="box">Score: <span id="score">0</span></div>
+      <div class="box">Best: <span id="best">0</span></div>
+    </div>
+
+    <canvas id="game" width="900" height="640"></canvas>
+
+    <div class="controls">
+      <div id="left-pad" class="touch-pad">
+        <div class="touch-stick" id="left-stick"></div>
+      </div>
+
+      <div id="jump-button" class="jump-btn">⤒</div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const scoreEl = document.getElementById("score");
+    const bestEl = document.getElementById("best");
+    const leftPad = document.getElementById("left-pad");
+    const leftStick = document.getElementById("left-stick");
+    const jumpButton = document.getElementById("jump-button");
+
+    const keys = {};
+    const obstacles = [];
+    const coins = [];
+    let holdingLeft = false;
+    let holdingRight = false;
+    let jumpQueued = false;
+
+    let gameState = "menu"; // menu, playing, crashed
+    let score = 0;
+    let best = Number(localStorage.getItem("snowSlopeBest") || 0);
+    let worldSpeed = 260;
+    let obstacleSpawnTimer = 0;
+    let coinSpawnTimer = 0;
+    let lastTime = 0;
+
+    const player = {
+      x: canvas.width / 2,
+      y: canvas.height - 110,
+      radius: 18,
+      vx: 0,
+      maxSpeed: 420,
+      accel: 900,
+      friction: 0.86,
+      tilt: 0,
+      vy: 0,
+      jumpPower: 440,
+      grounded: true
+    };
+
+    function updateHud() {
+      scoreEl.textContent = Math.floor(score);
+      bestEl.textContent = Math.floor(best);
+    }
+
+    function randomBetween(min, max) {
+      return min + Math.random() * (max - min);
+    }
+
+    function setStickPosition(dx, dy) {
+      const maxRadius = 42;
+      const len = Math.hypot(dx, dy);
+      const clamped = Math.min(maxRadius, len);
+      const angle = Math.atan2(dy, dx);
+      const x = Math.cos(angle) * clamped;
+      const y = Math.sin(angle) * clamped;
+      leftStick.style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px))`;
+    }
+
+    function resetStick() {
+      leftStick.style.transform = "translate(-50%, -50%)";
+    }
+
+    function startGame() {
+      gameState = "playing";
+      score = 0;
+      worldSpeed = 260;
+      obstacleSpawnTimer = 0.7;
+      coinSpawnTimer = 1.3;
+
+      player.x = canvas.width / 2;
+      player.y = canvas.height - 110;
+      player.vx = 0;
+      player.vy = 0;
+      player.tilt = 0;
+      player.grounded = true;
+
+      obstacles.length = 0;
+      coins.length = 0;
+      updateHud();
+    }
+
+    function spawnObstacle() {
+      const isTree = Math.random() < 0.55;
+      const x = randomBetween(60, canvas.width - 60);
+      obstacles.push({
+        x,
+        y: -60,
+        radius: isTree ? 22 : 18,
+        type: isTree ? "tree" : "rock",
+        drift: randomBetween(-55, 55),
+        speed: worldSpeed + randomBetween(10, 90)
+      });
+    }
+
+    function spawnCoin() {
+      coins.push({
+        x: randomBetween(80, canvas.width - 80),
+        y: -30,
+        radius: 11,
+        bob: Math.random() * Math.PI * 2
+      });
+    }
+
+    function jump() {
+      if (gameState !== "playing") return;
+      if (!player.grounded) return;
+
+      player.vy = -player.jumpPower;
+      player.grounded = false;
+    }
+
+    function handleMovement(dt) {
+      let dir = 0;
+
+      if (keys["ArrowLeft"] || keys["KeyA"] || holdingLeft) dir -= 1;
+      if (keys["ArrowRight"] || keys["KeyD"] || holdingRight) dir += 1;
+
+      if (dir !== 0) {
+        player.vx += dir * player.accel * dt;
+      } else {
+        player.vx *= Math.pow(player.friction, dt * 60);
+      }
+
+      player.vx = Math.max(-player.maxSpeed, Math.min(player.maxSpeed, player.vx));
+      player.x += player.vx * dt;
+      player.tilt = player.vx / 220;
+
+      if (player.x < player.radius + 20) {
+        player.x = player.radius + 20;
+        player.vx *= -0.35;
+      }
+      if (player.x > canvas.width - player.radius - 20) {
+        player.x = canvas.width - player.radius - 20;
+        player.vx *= -0.35;
+      }
+    }
+
+    function updateGame(dt) {
+      if (gameState !== "playing") return;
+
+      if (jumpQueued) {
+        jump();
+        jumpQueued = false;
+      }
+
+      handleMovement(dt);
+
+      player.vy += 880 * dt;
+      player.y += player.vy * dt;
+
+      if (player.y >= canvas.height - 110) {
+        player.y = canvas.height - 110;
+        player.vy = 0;
+        player.grounded = true;
+      }
+
+      score += dt * 10;
+      worldSpeed = 260 + score * 0.8;
+
+      obstacleSpawnTimer -= dt;
+      if (obstacleSpawnTimer <= 0) {
+        spawnObstacle();
+        obstacleSpawnTimer = randomBetween(0.65, 1.35);
+      }
+
+      coinSpawnTimer -= dt;
+      if (coinSpawnTimer <= 0) {
+        spawnCoin();
+        coinSpawnTimer = randomBetween(1.0, 2.1);
+      }
+
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const obs = obstacles[i];
+        obs.y += (obs.speed + 120) * dt;
+        obs.x += obs.drift * dt;
+
+        if (obs.x < 40 || obs.x > canvas.width - 40) {
+          obs.drift *= -1;
+        }
+
+        const dx = player.x - obs.x;
+        const dy = player.y - obs.y;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist < player.radius + obs.radius + 2) {
+          gameState = "crashed";
+          best = Math.max(best, Math.floor(score));
+          localStorage.setItem("snowSlopeBest", String(best));
+          updateHud();
+          return;
+        }
+
+        if (obs.y > canvas.height + 80) {
+          obstacles.splice(i, 1);
+        }
+      }
+
+      for (let i = coins.length - 1; i >= 0; i--) {
+        const coin = coins[i];
+        coin.y += (worldSpeed + 100) * dt;
+        coin.bob += dt * 8;
+
+        const dx = player.x - coin.x;
+        const dy = player.y - coin.y;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist < player.radius + coin.radius + 4) {
+          coins.splice(i, 1);
+          score += 35;
+          best = Math.max(best, Math.floor(score));
+          localStorage.setItem("snowSlopeBest", String(best));
+          updateHud();
+        } else if (coin.y > canvas.height + 50) {
+          coins.splice(i, 1);
+        }
+      }
+
+      updateHud();
+    }
+
+    function drawBackground() {
+      const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      sky.addColorStop(0, "#86ccff");
+      sky.addColorStop(0.6, "#dff3ff");
+      sky.addColorStop(1, "#f7fbff");
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = "rgba(255, 241, 158, 0.9)";
+      ctx.beginPath();
+      ctx.arc(canvas.width - 120, 90, 54, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#b9d8eb";
+      ctx.beginPath();
+      ctx.moveTo(0, canvas.height * 0.7);
+      ctx.lineTo(130, canvas.height * 0.42);
+      ctx.lineTo(250, canvas.height * 0.65);
+      ctx.lineTo(390, canvas.height * 0.38);
+      ctx.lineTo(540, canvas.height * 0.72);
+      ctx.lineTo(650, canvas.height * 0.45);
+      ctx.lineTo(800, canvas.height * 0.68);
+      ctx.lineTo(900, canvas.height * 0.62);
+      ctx.lineTo(900, canvas.height);
+      ctx.lineTo(0, canvas.height);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = "#f8fdff";
+      ctx.fillRect(0, canvas.height * 0.7, canvas.width, canvas.height * 0.3);
+
+      ctx.strokeStyle = "rgba(146, 164, 190, 0.5)";
+      ctx.lineWidth = 2;
+      for (let y = canvas.height * 0.72; y < canvas.height; y += 26) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y + 20);
+        ctx.stroke();
+      }
+    }
+
+    function drawPlayer() {
+      const x = player.x;
+      const y = player.y;
+      const tilt = player.tilt;
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(tilt * 0.12);
+
+      ctx.strokeStyle = "#1f2937";
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(-21, 12);
+      ctx.lineTo(-42, 24);
+      ctx.moveTo(21, 12);
+      ctx.lineTo(42, 24);
+      ctx.stroke();
+
+      ctx.fillStyle = "#ef4444";
+      ctx.beginPath();
+      ctx.arc(0, -8, 12, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#f8fafc";
+      ctx.beginPath();
+      ctx.arc(0, -20, 8, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = "#475569";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(-8, 10);
+      ctx.lineTo(-18, 34);
+      ctx.moveTo(8, 10);
+      ctx.lineTo(18, 34);
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    function drawObstacle(obs) {
+      if (obs.type === "tree") {
+        ctx.fillStyle = "#7a4d2c";
+        ctx.fillRect(obs.x - 4, obs.y + 12, 8, 28);
+
+        ctx.fillStyle = "#16a34a";
+        ctx.beginPath();
+        ctx.arc(obs.x, obs.y, 18, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(obs.x - 12, obs.y + 5, 12, 0, Math.PI * 2);
+        ctx.arc(obs.x + 12, obs.y + 5, 12, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.fillStyle = "#697783";
+        ctx.beginPath();
+        ctx.arc(obs.x, obs.y, obs.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(obs.x - 12, obs.y + 12);
+        ctx.lineTo(obs.x, obs.y - 12);
+        ctx.lineTo(obs.x + 12, obs.y + 12);
+        ctx.closePath();
+        ctx.fillStyle = "#8391a1";
+        ctx.fill();
+      }
+    }
+
+    function drawCoin(coin) {
+      const pulse = 1 + Math.sin(coin.bob) * 0.18;
+
+      ctx.save();
+      ctx.translate(coin.x, coin.y);
+      ctx.scale(pulse, pulse);
+
+      ctx.fillStyle = "#facc15";
+      ctx.beginPath();
+      ctx.arc(0, 0, coin.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#fef9c3";
+      ctx.beginPath();
+      ctx.arc(0, 0, coin.radius * 0.50, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function drawMenuOverlay() {
+      ctx.fillStyle = "rgba(15, 23, 42, 0.25)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 58px Arial";
+      ctx.fillText("Snow Slope", canvas.width / 2, canvas.height / 2 - 18);
+
+      ctx.font = "28px Arial";
+      ctx.fillText("Tap to start", canvas.width / 2, canvas.height / 2 + 34);
+
+      ctx.font = "22px Arial";
+      ctx.fillText("Use touch pad + jump button", canvas.width / 2, canvas.height / 2 + 78);
+    }
+
+    function drawCrashOverlay() {
+      ctx.fillStyle = "rgba(15, 23, 42, 0.32)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 56px Arial";
+      ctx.fillText("Crash!", canvas.width / 2, canvas.height / 2 - 25);
+
+      ctx.font = "28px Arial";
+      ctx.fillText("Tap to retry", canvas.width / 2, canvas.height / 2 + 40);
+
+      ctx.font = "22px Arial";
+      ctx.fillText("Score: " + Math.floor(score), canvas.width / 2, canvas.height / 2 + 82);
+    }
+
+    function render() {
+      drawBackground();
+
+      for (const obs of obstacles) drawObstacle(obs);
+      for (const coin of coins) drawCoin(coin);
+      drawPlayer();
+
+      if (gameState === "menu") {
+        drawMenuOverlay();
+      } else if (gameState === "crashed") {
+        drawCrashOverlay();
+      }
+    }
+
+    function gameLoop(timestamp) {
+      const dt = Math.min(0.032, (timestamp - lastTime) / 1000 || 0.016);
+      lastTime = timestamp;
+
+      updateGame(dt);
+      render();
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    function beginIfNeeded() {
+      if (gameState === "menu" || gameState === "crashed") {
+        startGame();
+      }
+    }
+
+    canvas.addEventListener("pointerdown", beginIfNeeded);
+    jumpButton.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      jumpQueued = true;
+    });
+
+    document.addEventListener("keydown", (e) => {
+      keys[e.code] = true;
+
+      if (e.code === "Enter" && (gameState === "menu" || gameState === "crashed")) {
+        startGame();
+      }
+
+      if (e.code === "Space") {
+        jumpQueued = true;
+      }
+    });
+
+    document.addEventListener("keyup", (e) => {
+      keys[e.code] = false;
+    });
+
+    function setupTouchPad() {
+      const padRect = () => leftPad.getBoundingClientRect();
+
+      leftPad.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        const rect = padRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const dx = e.clientX - cx;
+        const dy = e.clientY - cy;
+        setStickPosition(dx, dy);
+
+        const angle = Math.atan2(dy, dx);
+        const dist = Math.min(42, Math.hypot(dx, dy));
+        const movedX = Math.cos(angle) * dist;
+        const movedY = Math.sin(angle) * dist;
+
+        setStickPosition(movedX, movedY);
+
+        holdingLeft = movedX < -10;
+        holdingRight = movedX > 10;
+      });
+
+      leftPad.addEventListener("pointermove", (e) => {
+        if (e.pointerType === "mouse" && e.buttons === 0) return;
+        const rect = padRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const dx = e.clientX - cx;
+        const dy = e.clientY - cy;
+        const max = 42;
+        const dist = Math.min(max, Math.hypot(dx, dy));
+        const angle = Math.atan2(dy, dx);
+        const clampedX = Math.cos(angle) * dist;
+        const clampedY = Math.sin(angle) * dist;
+        setStickPosition(clampedX, clampedY);
+
+        holdingLeft = clampedX < -10;
+        holdingRight = clampedX > 10;
+      });
+
+      leftPad.addEventListener("pointerup", () => {
+        resetStick();
+        holdingLeft = false;
+        holdingRight = false;
+      });
+
+      leftPad.addEventListener("pointerleave", () => {
+        resetStick();
+        holdingLeft = false;
+        holdingRight = false;
+      });
+    }
+
+    setupTouchPad();
+    updateHud();
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
